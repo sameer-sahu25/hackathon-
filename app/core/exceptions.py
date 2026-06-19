@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
-from datetime import datetime
+from datetime import datetime, UTC
 from typing import Any
 
 
@@ -19,12 +19,21 @@ class AppException(Exception):
         self.details = details
 
 
+class RateLimitExceeded(AppException):
+    def __init__(self, message: str = "Too many requests"):
+        super().__init__(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            code="RATE_LIMIT_EXCEEDED",
+            message=message
+        )
+
+
 def create_success_response(data: Any, message: str = "Success") -> dict:
     return {
         "success": True,
         "data": data,
         "message": message,
-        "timestamp": datetime.utcnow().isoformat() + "Z"
+        "timestamp": datetime.now(UTC).isoformat()
     }
 
 
@@ -40,18 +49,21 @@ def create_error_response(
             "message": message,
             "details": details
         },
-        "timestamp": datetime.utcnow().isoformat() + "Z"
+        "timestamp": datetime.now(UTC).isoformat()
     }
 
 
-async def app_exception_handler(request: Request, exc: AppException):
+async def app_exception_handler(request: Request, exc: Exception):
+    # Type ignore because FastAPI expects specific exception types, but Pylance is strict
+    assert isinstance(exc, AppException)
     return JSONResponse(
         status_code=exc.status_code,
         content=create_error_response(exc.code, exc.message, exc.details)
     )
 
 
-async def validation_exception_handler(request: Request, exc: RequestValidationError):
+async def validation_exception_handler(request: Request, exc: Exception):
+    assert isinstance(exc, RequestValidationError)
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         content=create_error_response(

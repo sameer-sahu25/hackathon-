@@ -2,9 +2,6 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
-from slowapi.errors import RateLimitExceeded
 from app.config import settings
 from app.api.v1.router import api_router
 from app.core.exceptions import (
@@ -13,29 +10,21 @@ from app.core.exceptions import (
     validation_exception_handler,
     general_exception_handler
 )
-import sentry_sdk
-from sentry_sdk.integrations.fastapi import FastApiIntegration
-from sentry_sdk.integrations.starlette import StarletteIntegration
+from app.auth.rate_limiter import limiter, rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 from contextlib import asynccontextmanager
-
-
-if settings.SENTRY_DSN and settings.APP_ENV != "development":
-    sentry_sdk.init(
-        dsn=settings.SENTRY_DSN,
-        integrations=[
-            StarletteIntegration(),
-            FastApiIntegration(),
-        ],
-        traces_sample_rate=1.0,
-    )
-
-
-limiter = Limiter(key_func=get_remote_address)
+from app.monitoring.sentry_config import init_sentry
+from app.monitoring.posthog_config import init_posthog
+from app.monitoring.middleware.request_logging import RequestLoggingMiddleware
+from app.monitoring.middleware.error_capture import ErrorCaptureMiddleware
+from app.monitoring.dashboards.impact_dashboard import ImpactDashboardService
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
+    init_sentry()
+    init_posthog()
     yield
     # Shutdown
 
@@ -51,7 +40,7 @@ app = FastAPI(
 
 # Rate Limiting
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
 # CORS
 app.add_middleware(
@@ -61,6 +50,10 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+
+# Monitoring middleware
+app.add_middleware(RequestLoggingMiddleware)
+app.add_middleware(ErrorCaptureMiddleware)
 
 # Security Headers
 @app.middleware("http")
@@ -105,3 +98,21 @@ async def detailed_health():
         "database": "connected" if db_ok else "disconnected",
         "version": "1.0.0"
     }
+
+
+@app.get("/api/v1/analytics/impact", tags=["Analytics"])
+async def get_impact_metrics():
+    """Public impact dashboard endpoint for judges"""
+    return await ImpactDashboardService.get_live_impact_metrics()
+
+
+@app.get("/api/v1/analytics/trend", tags=["Analytics"])
+async def get_daily_trend(days: int =7):
+    """Daily trend for demo"""
+    return await ImpactDashboardService.get_daily_trend(days=days)
+
+
+@app.get("/api/v1/analytics/engineering", tags=["Analytics"])
+async def get_engineering_health():
+    """Engineering health dashboard"""
+    return await ImpactDashboardService.get_engineering_health()

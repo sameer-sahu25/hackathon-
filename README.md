@@ -172,6 +172,43 @@ pytest -v
 5. Set build command: `pip install -r requirements.txt`
 6. Set start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
 
+## Integrations & Resilience
+
+### Overview
+All third-party integrations are designed with production-grade resilience:
+- **Circuit breakers**: Open after 5 consecutive failures to avoid overwhelming services
+- **Exponential backoff**: Retry with increasing delays (1s → 4s → 8s)
+- **Fallback data**: Hardcoded critical resources if services are unavailable
+- **Redis caching**: Minimize repeated calls with centralized TTLs
+- **No PII logging**: All logs are PII-free
+- **Idempotent background tasks**: Safe to retry with Celery
+
+
+### Integration Details
+
+| Integration | Rate Limits (Service) | Cache TTL | Fallback |
+|---|---|---|---|
+| **Twilio SMS** | 1 API call per SMS, queued via Celery | N/A | Local queue + log-only |
+| **Google Maps** | Quota controlled by API key | Geocode: 30 days, Places: 30 min, Details:24h | TX/CA/NY/FL/IL hardcoded resources + 211 |
+| **HUD API** | Limited by HUD API key | 1 hour | Fallback HUD-like resources + 211 |
+| **211 API** | Limited by 211 API key |1 hour | Fallback resources per state |
+| **Data.gov** | Limited by Data.gov API key |24 hours | Basic federal housing rights |
+
+
+### Demo Prep
+Before demo, warm up caches and pre-generate assets by running:
+```bash
+python prep_demo.py
+```
+
+
+### Testing Integrations
+All integration tests mock external services (no live API calls!)
+```bash
+pytest tests/integrations -v
+```
+
+
 ## License
 
 MIT

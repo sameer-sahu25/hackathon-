@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Eviction Court Checklist</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <header>
+        <h1>Housing Stability AI Guide</h1>
+        <p>Important: Call 211 for free legal help before your court date!</p>
+    </header>
+    <main>
+        <h2>Your Eviction Court Checklist</h2>
+        <p>State: {{ state }}</p>
+        <p>Court Date: {{ court_date }}</p>
+        <p>Court Address: {{ court_address }}</p>
+        
+        <h3>Documents to Bring:</h3>
+        <ul>
+            {% for doc in documents_needed %}
+            <li><input type="checkbox"> {{ doc }}</li>
+            {% endfor %}
+        </ul>
+        
+        <h3>Important Rights:</h3>
+        <ul>
+            <li>You have the right to be heard</li>
+            <li>You have the right to request a continuance</li>
+            <li>You have the right to legal representation</li>
+        </ul>
+    </main>
+    <footer>
+        <p>24/7 Help: Call 211 or visit https://www.211.org</p>
+    </footer>
+</body>
+</html>

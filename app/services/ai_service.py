@@ -1,85 +1,15 @@
-from anthropic import AsyncAnthropic
-from app.config import settings
-from app.services.rag_service import retrieve_relevant_docs
-from app.schemas.action_plan import ActionPlanResponse, ActionStep, ResourceItem
+from app.ai.services import ClaudeService, ActionPlanService
+from app.ai.schemas import ActionPlanContext
+from app.schemas.action_plan import ActionPlanResponse as APResponse, ActionStep, ResourceItem
 from app.models.action_plan import UrgencyLevel
 from app.models.user import Language
-from typing import Optional
-import json
+from typing import Optional, Dict, Any
 import logging
 
 logger = logging.getLogger(__name__)
 
-client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
-
-SYSTEM_PROMPT = """
-You are a Housing Stability Navigator for the United States.
-Your role is to help renters understand their options and take action early when facing housing instability.
-You are NOT providing legal advice — you help users understand pathways and connect to resources.
-
-Always:
-1. Prioritize immediate safety first
-2. Surface state-specific tenant rights
-3. Provide concrete next steps with deadlines
-4. Refer complex cases to local legal aid
-5. Never give specific legal predictions or court outcomes
-6. Respond in plain language at a 6th-grade reading level
-7. If language = ES, respond entirely in Spanish
-
-Respond ONLY in JSON, matching the EXACT schema provided below, no other text.
-"""
-
-JSON_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "urgency_level": {"type": "string", "enum": ["CRITICAL", "HIGH", "MEDIUM", "LOW"]},
-        "urgency_reason": {"type": "string"},
-        "action_steps": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "step_number": {"type": "integer"},
-                    "title": {"type": "string"},
-                    "description": {"type": "string"},
-                    "deadline": {"type": "string"},
-                    "contact": {"type": "string"},
-                    "responsible_party": {"type": "string"}
-                },
-                "required": ["step_number", "title", "description", "deadline", "contact", "responsible_party"]
-            }
-        },
-        "resources": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string"},
-                    "type": {"type": "string", "enum": ["LEGAL_AID", "RENTAL_ASSISTANCE", "SHELTER", "FOOD_BANK", "MEDIATION"]},
-                    "phone": {"type": "string"},
-                    "url": {"type": "string"},
-                    "eligibility_notes": {"type": "string"},
-                    "distance_miles": {"type": "number"}
-                },
-                "required": ["name", "type", "phone", "url", "eligibility_notes", "distance_miles"]
-            }
-        },
-        "rights_summary": {"type": "string"},
-        "documents_needed": {"type": "array", "items": {"type": "string"}},
-        "escalation_flag": {"type": "boolean"},
-        "escalation_reason": {"type": "string"}
-    },
-    "required": [
-        "urgency_level",
-        "urgency_reason",
-        "action_steps",
-        "resources",
-        "rights_summary",
-        "documents_needed",
-        "escalation_flag",
-        "escalation_reason"
-    ]
-}
+claude = ClaudeService()
+action_plan_service = ActionPlanService()
 
 
 async def generate_action_plan(
@@ -92,91 +22,53 @@ async def generate_action_plan(
     has_received_notice: bool,
     language: Language = Language.EN,
     prior_steps: Optional[list] = None
-) -> dict:
-    relevant_docs = await retrieve_relevant_docs(
-        query=f"eviction rights rental assistance {situation_type.lower().replace('_', ' ')}",
+) -> Dict[str, Any]:
+    """Generate action plan using our new AI core and convert to API schema"""
+    context = ActionPlanContext(
         state=state,
-        situation_type=situation_type
+        county=county,
+        urgency_days=urgency_days,
+        income_monthly=income_monthly,
+        household_size=household_size,
+        situation_type=situation_type,
+        has_received_notice=has_received_notice,
+        language=language.value if hasattr(language, 'value') else str(language),
+        prior_steps=str(prior_steps) if prior_steps else ""
     )
-    rag_context = "\n\n".join(relevant_docs) if relevant_docs else "No specific state law data available."
 
-    user_context = f"""
-User Context:
-- State/County: {state}, {county}
-- Days until eviction: {urgency_days}
-- Monthly Income: ${income_monthly}
-- Household Size: {household_size}
-- Situation Type: {situation_type}
-- Received Notice: {has_received_notice}
-- Language: {language}
-- Prior Steps Taken: {prior_steps or "None"}
+    plan = await claude.generate_action_plan(context)
 
-Relevant Legal/Resource Information:
-{rag_context}
-
-Remember: NO LEGAL ADVICE, ONLY PATHWAYS AND RESOURCES.
-"""
-
-    try:
-        response = await client.messages.create(
-            model=settings.CLAUDE_MODEL,
-            max_tokens=settings.CLAUDE_MAX_TOKENS,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_context}]
-        )
-
-        raw_text = response.content[0].text
-        try:
-            result = json.loads(raw_text)
-            result["raw_claude_response"] = raw_text
-            return result
-        except json.JSONDecodeError:
-            logger.error(f"Claude returned invalid JSON: {raw_text}")
-            return _fallback_plan(state, situation_type, urgency_days)
-    except Exception as e:
-        logger.error(f"Claude API call failed: {e}")
-        return _fallback_plan(state, situation_type, urgency_days)
-
-
-def _fallback_plan(state: str, situation_type: str, urgency_days: int) -> dict:
-    urgency = UrgencyLevel.HIGH if urgency_days < 14 else UrgencyLevel.MEDIUM
-    if urgency_days <= 3:
-        urgency = UrgencyLevel.CRITICAL
-
-    return {
-        "urgency_level": urgency.value,
-        "urgency_reason": "Time-sensitive situation - please act quickly",
+    # Convert to API's expected format
+    compatible_plan = {
+        "urgency_level": plan.urgency_level.value if hasattr(plan.urgency_level, 'value') else str(plan.urgency_level),
+        "urgency_reason": plan.urgency_reason,
         "action_steps": [
-            {
-                "step_number": 1,
-                "title": "Contact Legal Aid Immediately",
-                "description": "Call your local legal aid society for free advice.",
-                "deadline": "Within 24 hours",
-                "contact": "Find local legal aid at LawHelp.org",
-                "responsible_party": "User"
-            },
-            {
-                "step_number": 2,
-                "title": "Gather Documents",
-                "description": "Collect lease, eviction notice, pay stubs, and ID.",
-                "deadline": "Within 3 days",
-                "contact": "N/A",
-                "responsible_party": "User"
-            }
+            ActionStep(
+                step_number=step.step_number,
+                title=step.title,
+                description=step.description,
+                deadline=step.deadline_description,
+                contact=step.contact_name or "",
+                responsible_party=step.responsible_party.value if hasattr(step.responsible_party, 'value') else str(step.responsible_party)
+            ).model_dump()
+            for step in plan.action_steps
         ],
         "resources": [
-            {
-                "name": "LawHelp.org",
-                "type": "LEGAL_AID",
-                "phone": "N/A",
-                "url": "https://www.lawhelp.org",
-                "eligibility_notes": "Free legal help for low-income individuals",
-                "distance_miles": 0.0
-            }
+            ResourceItem(
+                name=res.name,
+                type=res.type.value if hasattr(res.type, 'value') else str(res.type),
+                phone=res.phone or "",
+                url=str(res.url) if res.url else "",
+                eligibility_notes=res.eligibility_notes or "",
+                distance_miles=0.0
+            ).model_dump()
+            for res in plan.resources
         ],
-        "rights_summary": f"Tenants in {state} have rights. Contact legal aid immediately.",
-        "documents_needed": ["Lease agreement", "Eviction notice", "Pay stubs", "Government-issued ID"],
-        "escalation_flag": True,
-        "escalation_reason": "Fallback plan activated - please connect to legal aid.",
-        "raw_claude_response": "Fallback plan"
+        "rights_summary": plan.rights_summary.headline,
+        "documents_needed": [doc.document for doc in plan.documents_needed],
+        "escalation_flag": plan.escalation_flag,
+        "escalation_reason": plan.escalation_reason or "",
+        "raw_claude_response": plan.model_dump_json()
     }
+
+    return compatible_plan

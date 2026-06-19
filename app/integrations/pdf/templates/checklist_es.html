@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Lista de Verificación para la Corte de Desalojo</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <header>
+        <h1>Guía de IA para la Estabilidad Vivienda</h1>
+        <p>Importante: Llame al 211 para obtener ayuda legal gratuita antes de su fecha de corte!</p>
+    </header>
+    <main>
+        <h2>Su Lista de Verificación para la Corte de Desalojo</h2>
+        <p>Estado: {{ state }}</p>
+        <p>Fecha de Corte: {{ court_date }}</p>
+        <p>Dirección de la Corte: {{ court_address }}</p>
+        
+        <h3>Documentos para Traer:</h3>
+        <ul>
+            {% for doc in documents_needed %}
+            <li><input type="checkbox"> {{ doc }}</li>
+            {% endfor %}
+        </ul>
+        
+        <h3>Derechos Importantes:</h3>
+        <ul>
+            <li>Tiene derecho a ser escuchado</li>
+            <li>Tiene derecho a solicitar una prórroga</li>
+            <li>Tiene derecho a representación legal</li>
+        </ul>
+    </main>
+    <footer>
+        <p>Ayuda 24/7: Llame al 211 o visite https://www.211.org</p>
+    </footer>
+</body>
+</html>
